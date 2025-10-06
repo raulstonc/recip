@@ -1,5 +1,7 @@
 'use client';
+
 import { useEffect, useState } from 'react';
+import type { RealtimePostgresInsertPayload } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 
 type Msg = { id: number; sender: string; body: string; created_at: string };
@@ -12,28 +14,39 @@ export default function Chat({ params }: { params: { id: string } }) {
 
   useEffect(() => {
     const client = supabase();
+
     (async () => {
       const { data: { user } } = await client.auth.getUser();
-      if (!user) return (location.href = '/auth');
+      if (!user) {
+        location.href = '/auth';
+        return;
+      }
       setMe(user.id);
 
+      // Load existing messages
       const { data } = await client
         .from('messages')
         .select('*')
         .eq('match_id', matchId)
         .order('created_at', { ascending: true });
+
       setMsgs(data ?? []);
 
+      // Realtime: new messages
       const channel = client
         .channel(`chat:${matchId}`)
         .on(
           'postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'messages', filter: `match_id=eq.${matchId}` },
-          (payload: any) => setMsgs((m) => [...m, payload.new as Msg])
+          (payload: RealtimePostgresInsertPayload<Msg>) => {
+            setMsgs((m) => [...m, payload.new]);
+          }
         )
         .subscribe();
 
-      return () => { client.removeChannel(channel); };
+      return () => {
+        client.removeChannel(channel);
+      };
     })();
   }, [matchId]);
 
@@ -41,7 +54,9 @@ export default function Chat({ params }: { params: { id: string } }) {
     if (!text.trim() || !me) return;
     const body = text.trim();
     setText('');
-    const { error } = await supabase().from('messages').insert({ match_id: matchId, sender: me, body });
+    const { error } = await supabase()
+      .from('messages')
+      .insert({ match_id: matchId, sender: me, body });
     if (error) alert(error.message);
   }
 
